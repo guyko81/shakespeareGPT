@@ -14,6 +14,7 @@ tokenizer = Tokenizer.from_file(str(tokenizer_path))
 @dataclass
 class Config:
     use_characters = True # Set to False to use BPE tokens
+    device = 'cpu'        # 'cpu' or 'gpu'
     block_size = 256 # context-length
     batch_size = 10000 # Increased chunk size
     
@@ -22,7 +23,7 @@ class Config:
     train_size = 0.8 
     
     # NN params
-    train_iters = 50
+    train_iters = 500 
     val_iters = 500 
     eval_interval = 10 # More frequent evaluation
 
@@ -95,9 +96,12 @@ def main():
         'objective': 'multiclass',
         'num_class': Config.vocab_size,
         'metric': 'multi_logloss',
-        'verbose': -1,        # Set back to -1 to hide per-class tree logs
+        'device': Config.device,
+        'gpu_platform_id': 0,
+        'gpu_device_id': 0,
+        'verbose': -1,
         'seed': 42,
-        'num_threads': 1,     # Still 1 for stability on Windows
+        'num_threads': -1,    # Use all available cores
         'max_depth': 6,
         'num_leaves': 100,
         'learning_rate': 0.05,
