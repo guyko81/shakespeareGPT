@@ -41,8 +41,8 @@ class Config:
     min_data_in_leaf = 1         # Minimum samples in leaf
     
     # Boosting params
-    bootstrap_type = 'MVS'       # 'Bayesian', 'Bernoulli', 'MVS', 'Poisson' (GPU supports MVS/Poisson)
-    subsample = 0.8              # Subsample ratio (for Bernoulli/MVS)
+    bootstrap_type = 'Bayesian'  # 'Bayesian', 'Bernoulli', 'MVS', 'Poisson' (GPU multiclass: Bayesian/Bernoulli)
+    bagging_temperature = 1.0    # For Bayesian bootstrap (higher = more randomness)
     sampling_frequency = 'PerTree'  # 'PerTree' or 'PerTreeLevel'
     
     # Early stopping
@@ -147,7 +147,7 @@ def main():
         
         # Boosting params
         bootstrap_type=Config.bootstrap_type,
-        subsample=Config.subsample,
+        bagging_temperature=Config.bagging_temperature,
         sampling_frequency=Config.sampling_frequency,
         
         # Early stopping
