@@ -21,9 +21,9 @@ class Config:
     train_size = 0.8 
     
     # Model params
-    iterations = 500
-    learning_rate = 0.05
-    depth = 6                    # Tree depth (max 16 for GPU)
+    iterations = 5000
+    learning_rate = 0.1
+    depth = 10                   # Tree depth (max 16 for GPU)
     l2_leaf_reg = 3.0            # L2 regularization coefficient
     random_seed = 42
     
@@ -37,7 +37,7 @@ class Config:
     max_ctr_complexity = 4       # Max number of categorical features to combine
     
     # Tree structure
-    grow_policy = 'SymmetricTree'  # 'SymmetricTree', 'Depthwise', 'Lossguide'
+    grow_policy = 'Lossguide'  # 'SymmetricTree', 'Depthwise', 'Lossguide'
     min_data_in_leaf = 1         # Minimum samples in leaf
     
     # Boosting params
