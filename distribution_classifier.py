@@ -102,7 +102,7 @@ class DistributionClassifier(BaseEstimator, ClassifierMixin):
             X_array = X
             y_array = np.asarray(y)
             
-        X_array, y_array = check_X_y(X_array, y_array, accept_sparse=False, dtype=np.float64)
+        X_array, y_array = check_X_y(X_array, y_array, accept_sparse=False, dtype=None)
         self.n_features_in_ = X_array.shape[1]
         n_samples = X_array.shape[0]
         
