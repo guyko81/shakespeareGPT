@@ -21,8 +21,36 @@ class Config:
     train_size = 0.8 
     
     # Model params
-    n_estimators = 500
+    iterations = 500
     learning_rate = 0.05
+    depth = 6                    # Tree depth (max 16 for GPU)
+    l2_leaf_reg = 3.0            # L2 regularization coefficient
+    random_seed = 42
+    
+    # GPU params
+    task_type = 'GPU'            # 'CPU' or 'GPU'
+    devices = '0'                # GPU device id(s), e.g. '0' or '0:1' for multi-gpu
+    gpu_ram_part = 0.95          # Fraction of GPU RAM to use
+    
+    # Categorical feature params
+    one_hot_max_size = 2         # Max size for one-hot encoding (use CTR for larger)
+    max_ctr_complexity = 4       # Max number of categorical features to combine
+    
+    # Tree structure
+    grow_policy = 'SymmetricTree'  # 'SymmetricTree', 'Depthwise', 'Lossguide'
+    min_data_in_leaf = 1         # Minimum samples in leaf
+    
+    # Boosting params
+    bootstrap_type = 'MVS'       # 'Bayesian', 'Bernoulli', 'MVS', 'Poisson' (GPU supports MVS/Poisson)
+    subsample = 0.8              # Subsample ratio (for Bernoulli/MVS)
+    sampling_frequency = 'PerTree'  # 'PerTree' or 'PerTreeLevel'
+    
+    # Early stopping
+    early_stopping_rounds = 50   # Stop if no improvement for N rounds (None to disable)
+    use_best_model = True        # Use best iteration based on eval metric
+    
+    # Logging
+    verbose = 1                  # Print every N iterations (1 = every iter)
 
 class CharTokenizer:
     def __init__(self, text):
@@ -84,7 +112,7 @@ def main():
     X_val, y_val = prepare_full_data(val_data_raw, Config.block_size)
     print(f"X_val shape: {X_val.shape}")
 
-    print(f"Starting full training for {Config.n_estimators} rounds...")
+    print(f"Starting full training for {Config.iterations} rounds...")
     print(f"Vocab size: {Config.vocab_size}")
     
     # All context positions are categorical features (token IDs)
@@ -92,19 +120,48 @@ def main():
     
     print("Creating CatBoostClassifier (this may take a minute with categorical features)...")
     model = CatBoostClassifier(
-        iterations=Config.n_estimators,
+        # Core params
+        iterations=Config.iterations,
         learning_rate=Config.learning_rate,
-        random_seed=42,
+        depth=Config.depth,
+        l2_leaf_reg=Config.l2_leaf_reg,
+        random_seed=Config.random_seed,
+        
+        # Loss and eval
+        loss_function='MultiClass',
+        eval_metric='MultiClass',
+        
+        # GPU params
+        task_type=Config.task_type,
+        devices=Config.devices,
+        gpu_ram_part=Config.gpu_ram_part,
+        
+        # Categorical feature params
         cat_features=cat_features,
-        task_type='GPU',
-        depth=6,
-        verbose=1
+        one_hot_max_size=Config.one_hot_max_size,
+        max_ctr_complexity=Config.max_ctr_complexity,
+        
+        # Tree structure
+        grow_policy=Config.grow_policy,
+        min_data_in_leaf=Config.min_data_in_leaf,
+        
+        # Boosting params
+        bootstrap_type=Config.bootstrap_type,
+        subsample=Config.subsample,
+        sampling_frequency=Config.sampling_frequency,
+        
+        # Early stopping
+        early_stopping_rounds=Config.early_stopping_rounds,
+        use_best_model=Config.use_best_model,
+        
+        # Logging
+        verbose=Config.verbose
     )
     
     start_time = time.time()
     print("Model ready. Starting CatBoost train...")
     
-    model.fit(X_train, y_train, eval_set=(X_val, y_val))
+    model.fit(X_train, y_train, eval_set=(X_val, y_val), early_stopping_rounds=Config.early_stopping_rounds)
     
     print(f"\nTraining finished in {time.time() - start_time:.2f} seconds")
     
