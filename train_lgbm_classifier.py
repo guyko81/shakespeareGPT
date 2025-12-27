@@ -15,6 +15,7 @@ tokenizer_path = Path('./tokenizer/shakespeare.json')
 class Config:
     use_characters = True # Set to False to use BPE tokens
     block_size = 256 # context-length
+    batch_size = 10000 # Required by ShakespeareDataset
     
     vocab_size = 0 # Set dynamically
     
