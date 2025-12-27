@@ -84,13 +84,13 @@ def main():
     X_val, y_val = prepare_full_data(val_data_raw, Config.block_size)
     print(f"X_val shape: {X_val.shape}")
 
-    print(f"Starting training with CatBoostClassifier...")
+    print(f"Starting full training for {Config.n_estimators} rounds...")
     print(f"Vocab size: {Config.vocab_size}")
-    print(f"n_estimators: {Config.n_estimators}, learning_rate: {Config.learning_rate}")
     
     # All context positions are categorical features (token IDs)
     cat_features = list(range(Config.block_size))
     
+    print("Creating CatBoostClassifier (this may take a minute with categorical features)...")
     model = CatBoostClassifier(
         iterations=Config.n_estimators,
         learning_rate=Config.learning_rate,
@@ -98,11 +98,11 @@ def main():
         cat_features=cat_features,
         task_type='GPU',
         depth=6,
-        verbose=100
+        verbose=1
     )
     
     start_time = time.time()
-    print("Fitting CatBoostClassifier...")
+    print("Model ready. Starting CatBoost train...")
     
     model.fit(X_train, y_train, eval_set=(X_val, y_val))
     
