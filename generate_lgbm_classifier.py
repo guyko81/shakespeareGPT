@@ -50,9 +50,9 @@ def generate():
     context_char = '\n'
     context_ids = tokenizer.encode(context_char)
     
-    # Pad to block_size
+    # Pad to block_size (must be int for categorical features)
     full_context = [0] * (Config.block_size - len(context_ids)) + context_ids
-    current_context = np.array(full_context, dtype=np.float64)
+    current_context = np.array(full_context, dtype=np.int32)
     
     generated_ids = []
     length = 500
@@ -71,8 +71,8 @@ def generate():
         next_id = np.random.choice(top_k_indices, p=top_k_probs)
         generated_ids.append(int(next_id))
         
-        # Update context
-        current_context = np.roll(current_context, -1)
+        # Update context (shift left and append new token)
+        current_context[:-1] = current_context[1:]
         current_context[-1] = next_id
         
         if i % 50 == 0:
