@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from tokenizers import Tokenizer
 import time
 from pathlib import Path
-import joblib
-from distribution_classifier import DistributionClassifier
+from catboost import CatBoostClassifier
 
 # Setup paths (similar to train.py)
 tokenizer_path = Path('./tokenizer/shakespeare.json')
@@ -85,37 +84,33 @@ def main():
     X_val, y_val = prepare_full_data(val_data_raw, Config.block_size)
     print(f"X_val shape: {X_val.shape}")
 
-    print(f"Starting training with DistributionClassifier...")
+    print(f"Starting training with CatBoostClassifier...")
     print(f"Vocab size: {Config.vocab_size}")
     print(f"n_estimators: {Config.n_estimators}, learning_rate: {Config.learning_rate}")
     
     # All context positions are categorical features (token IDs)
     cat_features = list(range(Config.block_size))
     
-    # Create DistributionClassifier with sigma=0 for hard targets (one-hot)
-    model = DistributionClassifier(
-        n_bins='auto',  # Uses unique class values
-        sigma=0.0,      # Hard targets (one-hot)
-        n_estimators=Config.n_estimators,
+    model = CatBoostClassifier(
+        iterations=Config.n_estimators,
         learning_rate=Config.learning_rate,
-        random_state=42,
-        categorical_feature=cat_features,
-        device='gpu',
-        max_depth=6,
-        num_leaves=100,
-        n_jobs=-1
+        random_seed=42,
+        cat_features=cat_features,
+        task_type='GPU',
+        depth=6,
+        verbose=100
     )
     
     start_time = time.time()
-    print("Fitting DistributionClassifier...")
+    print("Fitting CatBoostClassifier...")
     
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, eval_set=(X_val, y_val))
     
     print(f"\nTraining finished in {time.time() - start_time:.2f} seconds")
     
-    # Save model using joblib
-    model_path = Path('shakespeare_dist_classifier.joblib')
-    joblib.dump(model, model_path)
+    # Save model using CatBoost's native format
+    model_path = Path('shakespeare_catboost_classifier.cbm')
+    model.save_model(str(model_path))
     print(f"Model saved to {model_path}")
 
 if __name__ == "__main__":

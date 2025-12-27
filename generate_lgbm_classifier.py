@@ -1,5 +1,5 @@
 import numpy as np
-import joblib
+from catboost import CatBoostClassifier
 from tokenizers import Tokenizer
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +26,7 @@ class Config:
     top_k = 5  # Sample from top 5 tokens
 
 def generate():
-    model_path = Path('shakespeare_dist_classifier.joblib')
+    model_path = Path('shakespeare_catboost_classifier.cbm')
     print(f"Loading model from {model_path}...")
     if not model_path.exists():
         print("Model file not found! Run train_lgbm_classifier.py first.")
@@ -43,7 +43,8 @@ def generate():
         tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
     Config.vocab_size = tokenizer.get_vocab_size()
-    model = joblib.load(model_path)
+    model = CatBoostClassifier()
+    model.load_model(str(model_path))
     
     # Start with a simple context (e.g., newline)
     context_char = '\n'
