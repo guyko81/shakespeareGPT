@@ -67,7 +67,7 @@ def prepare_full_data(data, block_size, transformer_model, device):
     """
     from numpy.lib.stride_tricks import sliding_window_view
     data_np = data.numpy().astype(np.int32)
-    print(f"Preparing sliding windows for {len(data_np)} tokens...")
+    print(f"Step 1/4: Preparing sliding windows for {len(data_np):,} tokens...")
     windows = sliding_window_view(data_np, window_shape=block_size + 1)
     
     # Split into inputs and targets
@@ -76,19 +76,22 @@ def prepare_full_data(data, block_size, transformer_model, device):
     X_ids = np.ascontiguousarray(windows[:, :-1])
     y = np.ascontiguousarray(windows[:, -1])
     
-    print(f"Extracting features with transformer (batch processing)...")
+    print(f"Step 2/4: Created {len(X_ids):,} samples")
+    print(f"Step 3/4: Extracting features with transformer (batch processing)...")
     
     # Convert to torch tensor
-    X_ids_torch = torch.from_numpy(X_ids).long().to(device)
+    X_ids_torch = torch.from_numpy(X_ids).long()
     
     # Extract features in batches to avoid OOM
-    batch_size = 512  # Process 512 samples at a time
+    batch_size = 256  # Smaller batch size for CPU
     all_features = []
     
     transformer_model.eval()
+    total_batches = (len(X_ids_torch) + batch_size - 1) // batch_size
+    
     with torch.no_grad():
-        for i in range(0, len(X_ids_torch), batch_size):
-            batch = X_ids_torch[i:i+batch_size]
+        for batch_idx, i in enumerate(range(0, len(X_ids_torch), batch_size)):
+            batch = X_ids_torch[i:i+batch_size].to(device)
             
             # Get token embeddings + positional embeddings
             B, T = batch.shape
@@ -105,11 +108,15 @@ def prepare_full_data(data, block_size, transformer_model, device):
             
             all_features.append(x_flat.cpu().numpy())
             
-            if i % 10000 == 0:
-                print(f"Processed {i}/{len(X_ids_torch)} samples...", end='\r')
+            # Progress logging every 10 batches or at the end
+            if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
+                processed = min((batch_idx + 1) * batch_size, len(X_ids_torch))
+                print(f"  Batch {batch_idx + 1}/{total_batches}: Processed {processed:,}/{len(X_ids_torch):,} samples ({100 * processed / len(X_ids_torch):.1f}%)")
     
+    print(f"Step 4/4: Concatenating features...")
     X_flat = np.concatenate(all_features, axis=0).astype(np.float32)
-    print(f"\nFeature extraction complete. Shape: {X_flat.shape}")
+    print(f"Feature extraction complete! Final shape: {X_flat.shape}")
+    print(f"  Memory usage: ~{X_flat.nbytes / (1024**2):.1f} MB")
     
     return X_flat, y
 
@@ -142,22 +149,27 @@ def main():
         train_data_raw = train_ds.data
         val_data_raw = val_ds.data
 
-    # Initialize transformer for feature extraction
-    print(f"Initializing transformer model on {Config.device}...")
-    transformer = ShakespeareGPT(Config).to(Config.device)
+    # Initialize transformer for feature extraction (on CPU to save memory)
+    print(f"Initializing transformer model on CPU for feature extraction...")
+    transformer = ShakespeareGPT(Config).to('cpu')
     print(f"Transformer parameters: {sum(p.numel() for p in transformer.parameters()):,}")
     
     # Keep transformer frozen (random initialization, no training)
     for param in transformer.parameters():
         param.requires_grad = False
 
-    print("Preparing Training Data...")
-    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, transformer, Config.device)
+    print("\n" + "="*60)
+    print("PREPARING TRAINING DATA")
+    print("="*60)
+    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, transformer, 'cpu')
     print(f"X_train shape: {X_train.shape}")
 
-    print("Preparing Validation Data...")
-    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, transformer, Config.device)
+    print("\n" + "="*60)
+    print("PREPARING VALIDATION DATA")
+    print("="*60)
+    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, transformer, 'cpu')
     print(f"X_val shape: {X_val.shape}")
+    print("="*60 + "\n")
 
     # No categorical features anymore
     cat_features = None # list(range(Config.block_size))
