@@ -83,11 +83,21 @@ def prepare_full_data(data, block_size, transformer_model, device):
     X_ids_torch = torch.from_numpy(X_ids).long()
     
     # Extract features in batches to avoid OOM
-    batch_size = 256  # Smaller batch size for CPU
-    all_features = []
-    
-    transformer_model.eval()
+    batch_size = 4096
     total_batches = (len(X_ids_torch) + batch_size - 1) // batch_size
+    
+    # Preallocate output array to avoid memory issues during concatenation
+    n_samples = len(X_ids_torch)
+    n_features = block_size * transformer_model.n_embed  # Will be computed from first batch
+    
+    print(f"Step 3a: Preallocating output array ({n_samples:,} samples x {n_features:,} features)...")
+    expected_size_mb = n_samples * n_features * 4 / (1024**2)  # float32 = 4 bytes
+    print(f"  Expected memory usage: ~{expected_size_mb:.1f} MB")
+    
+    X_flat = np.zeros((n_samples, n_features), dtype=np.float32)
+    
+    print(f"Step 3b: Extracting features and writing directly to preallocated array...")
+    transformer_model.eval()
     
     with torch.no_grad():
         for batch_idx, i in enumerate(range(0, len(X_ids_torch), batch_size)):
@@ -104,18 +114,19 @@ def prepare_full_data(data, block_size, transformer_model, device):
             
             # x shape: (B, T, n_embed)
             # Flatten to (B, T * n_embed)
-            x_flat = x.reshape(B, -1)
+            x_flat_batch = x.reshape(B, -1).cpu().numpy()
             
-            all_features.append(x_flat.cpu().numpy())
+            # Write directly to preallocated array
+            end_idx = min(i + batch_size, n_samples)
+            X_flat[i:end_idx] = x_flat_batch
             
             # Progress logging every 10 batches or at the end
             if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
                 processed = min((batch_idx + 1) * batch_size, len(X_ids_torch))
                 print(f"  Batch {batch_idx + 1}/{total_batches}: Processed {processed:,}/{len(X_ids_torch):,} samples ({100 * processed / len(X_ids_torch):.1f}%)")
     
-    print(f"Step 4/4: Concatenating features...")
-    X_flat = np.concatenate(all_features, axis=0).astype(np.float32)
-    print(f"Feature extraction complete! Final shape: {X_flat.shape}")
+    print(f"Step 4/4: Feature extraction complete!")
+    print(f"  Final shape: {X_flat.shape}")
     print(f"  Memory usage: ~{X_flat.nbytes / (1024**2):.1f} MB")
     
     return X_flat, y
