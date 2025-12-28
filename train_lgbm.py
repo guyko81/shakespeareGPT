@@ -26,6 +26,7 @@ class Config:
     train_iters = 500 
     val_iters = 500 
     eval_interval = 10 # More frequent evaluation
+    early_stopping_rounds = 50 # Stop if no improvement for 50 rounds
 
 class CharTokenizer:
     def __init__(self, text):
@@ -102,11 +103,12 @@ def main():
         'verbose': -1,
         'seed': 42,
         'num_threads': -1,    # Use all available cores
-        'max_depth': 6,
-        'num_leaves': 100,
-        'learning_rate': 0.05,
-        'min_data_in_leaf': 10,
-        'min_data_per_group': 10
+        'max_depth': 16,
+        'num_leaves': 4096,
+        'learning_rate': 0.1,
+        'min_data_in_leaf': 1,
+        'lambda_l1': 1.0,
+        'lambda_l2': 1.0,
     }
     
     print(f"Starting full training for {Config.train_iters} rounds...")
@@ -127,7 +129,10 @@ def main():
         num_boost_round=Config.train_iters,
         valid_sets=[lgb_train, lgb_val],
         valid_names=['train', 'valid'],
-        callbacks=[lgb.log_evaluation(period=1)] # Set to 1 to see progress every round
+        callbacks=[
+            lgb.log_evaluation(period=1),
+            lgb.early_stopping(stopping_rounds=Config.early_stopping_rounds)
+        ]
     )
     
     print(f"\nTraining finished in {time.time() - start_time:.2f} seconds")
