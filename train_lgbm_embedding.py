@@ -30,6 +30,9 @@ class Config:
     attn_dropout = 0.0 # No dropout for feature extraction
     block_dropout = 0.0 # No dropout for feature extraction
     
+    # Feature projection params
+    output_dimension = 256 # Dimensionality reduction: flatten(block_size * n_embed) -> output_dimension
+    
     train_size = 0.8 
     
     # LGBM params
@@ -51,18 +54,53 @@ class CharTokenizer:
     def get_vocab_size(self):
         return self.vocab_size
 
-def prepare_full_data(data, block_size, transformer_model, device):
+class FeatureExtractor(nn.Module):
+    """Wrapper around ShakespeareGPT that adds dimensionality reduction."""
+    def __init__(self, transformer_model, input_dim, output_dim):
+        super().__init__()
+        self.transformer = transformer_model
+        self.projection = nn.Linear(input_dim, output_dim)
+        self.output_dim = output_dim
+        
+    def forward(self, idx):
+        """
+        Args:
+            idx: (B, T) token indices
+        Returns:
+            (B, output_dim) projected features
+        """
+        B, T = idx.shape
+        device = idx.device
+        
+        # Get token embeddings + positional embeddings
+        token_embs = self.transformer.token_embedding_table(idx)
+        pos_embs = self.transformer.pos_embedding_table(torch.arange(T, device=device))
+        x = token_embs + pos_embs
+        
+        # Pass through transformer blocks
+        x = self.transformer.blocks(x)
+        
+        # x shape: (B, T, n_embed)
+        # Flatten to (B, T * n_embed)
+        x_flat = x.reshape(B, -1)
+        
+        # Project to output dimension
+        features = self.projection(x_flat)
+        
+        return features
+
+def prepare_full_data(data, block_size, feature_extractor, device):
     """
-    Extract features using the transformer model.
+    Extract features using the feature extractor model (transformer + projection).
     
     Args:
         data: torch.Tensor of token IDs
         block_size: context length
-        transformer_model: ShakespeareGPT model (without LM head, or we ignore its output)
+        feature_extractor: FeatureExtractor model (transformer + projection layer)
         device: 'cpu' or 'cuda'
     
     Returns:
-        X_flat: (N, block_size * n_embed) numpy array
+        X_features: (N, output_dimension) numpy array
         y: (N,) numpy array of target tokens
     """
     from numpy.lib.stride_tricks import sliding_window_view
@@ -77,7 +115,7 @@ def prepare_full_data(data, block_size, transformer_model, device):
     y = np.ascontiguousarray(windows[:, -1])
     
     print(f"Step 2/4: Created {len(X_ids):,} samples")
-    print(f"Step 3/4: Extracting features with transformer (batch processing)...")
+    print(f"Step 3/4: Extracting features with transformer + projection (batch processing)...")
     
     # Convert to torch tensor
     X_ids_torch = torch.from_numpy(X_ids).long()
@@ -88,37 +126,27 @@ def prepare_full_data(data, block_size, transformer_model, device):
     
     # Preallocate output array to avoid memory issues during concatenation
     n_samples = len(X_ids_torch)
-    n_features = block_size * transformer_model.n_embed  # Will be computed from first batch
+    n_features = feature_extractor.output_dim
     
     print(f"Step 3a: Preallocating output array ({n_samples:,} samples x {n_features:,} features)...")
     expected_size_mb = n_samples * n_features * 4 / (1024**2)  # float32 = 4 bytes
     print(f"  Expected memory usage: ~{expected_size_mb:.1f} MB")
     
-    X_flat = np.zeros((n_samples, n_features), dtype=np.float32)
+    X_features = np.zeros((n_samples, n_features), dtype=np.float32)
     
     print(f"Step 3b: Extracting features and writing directly to preallocated array...")
-    transformer_model.eval()
+    feature_extractor.eval()
     
     with torch.no_grad():
         for batch_idx, i in enumerate(range(0, len(X_ids_torch), batch_size)):
             batch = X_ids_torch[i:i+batch_size].to(device)
             
-            # Get token embeddings + positional embeddings
-            B, T = batch.shape
-            token_embs = transformer_model.token_embedding_table(batch)
-            pos_embs = transformer_model.pos_embedding_table(torch.arange(T, device=device))
-            x = token_embs + pos_embs
-            
-            # Pass through transformer blocks
-            x = transformer_model.blocks(x)
-            
-            # x shape: (B, T, n_embed)
-            # Flatten to (B, T * n_embed)
-            x_flat_batch = x.reshape(B, -1).cpu().numpy()
+            # Get features from feature extractor (includes transformer + projection)
+            features_batch = feature_extractor(batch).cpu().numpy()
             
             # Write directly to preallocated array
             end_idx = min(i + batch_size, n_samples)
-            X_flat[i:end_idx] = x_flat_batch
+            X_features[i:end_idx] = features_batch
             
             # Progress logging every 10 batches or at the end
             if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == total_batches:
@@ -126,10 +154,10 @@ def prepare_full_data(data, block_size, transformer_model, device):
                 print(f"  Batch {batch_idx + 1}/{total_batches}: Processed {processed:,}/{len(X_ids_torch):,} samples ({100 * processed / len(X_ids_torch):.1f}%)")
     
     print(f"Step 4/4: Feature extraction complete!")
-    print(f"  Final shape: {X_flat.shape}")
-    print(f"  Memory usage: ~{X_flat.nbytes / (1024**2):.1f} MB")
+    print(f"  Final shape: {X_features.shape}")
+    print(f"  Memory usage: ~{X_features.nbytes / (1024**2):.1f} MB")
     
-    return X_flat, y
+    return X_features, y
 
 def main():
     print("Initializing datasets...")
@@ -160,25 +188,33 @@ def main():
         train_data_raw = train_ds.data
         val_data_raw = val_ds.data
 
-    # Initialize transformer for feature extraction (on CPU to save memory)
-    print(f"Initializing transformer model on CPU for feature extraction...")
-    transformer = ShakespeareGPT(Config).to('cuda')
-    print(f"Transformer parameters: {sum(p.numel() for p in transformer.parameters()):,}")
+    # Initialize transformer and feature extractor
+    print(f"Initializing transformer model on {Config.device} for feature extraction...")
+    transformer = ShakespeareGPT(Config).to(Config.device)
     
-    # Keep transformer frozen (random initialization, no training)
-    for param in transformer.parameters():
+    # Create feature extractor with projection layer
+    input_dim = Config.block_size * Config.n_embed
+    feature_extractor = FeatureExtractor(transformer, input_dim, Config.output_dimension).to(Config.device)
+    
+    total_params = sum(p.numel() for p in feature_extractor.parameters())
+    print(f"Feature extractor parameters: {total_params:,}")
+    print(f"  - Transformer: {sum(p.numel() for p in transformer.parameters()):,}")
+    print(f"  - Projection layer: {input_dim} -> {Config.output_dimension}")
+    
+    # Keep feature extractor frozen (random initialization, no training)
+    for param in feature_extractor.parameters():
         param.requires_grad = False
 
     print("\n" + "="*60)
     print("PREPARING TRAINING DATA")
     print("="*60)
-    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, transformer, 'cuda')
+    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, feature_extractor, Config.device)
     print(f"X_train shape: {X_train.shape}")
 
     print("\n" + "="*60)
     print("PREPARING VALIDATION DATA")
     print("="*60)
-    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, transformer, 'cuda')
+    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, feature_extractor, Config.device)
     print(f"X_val shape: {X_val.shape}")
     print("="*60 + "\n")
 
@@ -199,13 +235,13 @@ def main():
         'verbose': -1,
         'seed': 42,
         'num_threads': -1,    # Use all available cores
-        'max_depth': 16,
-        'num_leaves': 20000,
+        'max_depth': 6,
+        'num_leaves': 256,
         'learning_rate': 0.1,
         'min_data_in_leaf': 1,
-        'cat_l2': 1.0,
-        'subsample': 1.0,
-        'feature_fraction': 1.0
+        'lambda_l2': 1.0,
+        'subsample': 0.8,
+        'feature_fraction': 0.8
     }
     
     print(f"Starting full training for {Config.train_iters} rounds...")
@@ -239,10 +275,10 @@ def main():
     model.save_model(str(model_path))
     print(f"LightGBM model saved to {model_path}")
     
-    # Save transformer model
-    transformer_path = Path('shakespeare_transformer_feature_extractor.pth')
-    torch.save(transformer.state_dict(), transformer_path)
-    print(f"Transformer feature extractor saved to {transformer_path}")
+    # Save feature extractor (transformer + projection layer)
+    feature_extractor_path = Path('shakespeare_feature_extractor.pth')
+    torch.save(feature_extractor.state_dict(), feature_extractor_path)
+    print(f"Feature extractor saved to {feature_extractor_path}")
 
 if __name__ == "__main__":
     main()

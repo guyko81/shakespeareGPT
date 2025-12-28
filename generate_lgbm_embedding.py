@@ -1,6 +1,7 @@
 import lightgbm as lgb
 import numpy as np
 import torch
+import torch.nn as nn
 from tokenizers import Tokenizer
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,41 @@ class CharTokenizer:
     def get_vocab_size(self):
         return self.vocab_size
 
+class FeatureExtractor(nn.Module):
+    """Wrapper around ShakespeareGPT that adds dimensionality reduction."""
+    def __init__(self, transformer_model, input_dim, output_dim):
+        super().__init__()
+        self.transformer = transformer_model
+        self.projection = nn.Linear(input_dim, output_dim)
+        self.output_dim = output_dim
+        
+    def forward(self, idx):
+        """
+        Args:
+            idx: (B, T) token indices
+        Returns:
+            (B, output_dim) projected features
+        """
+        B, T = idx.shape
+        device = idx.device
+        
+        # Get token embeddings + positional embeddings
+        token_embs = self.transformer.token_embedding_table(idx)
+        pos_embs = self.transformer.pos_embedding_table(torch.arange(T, device=device))
+        x = token_embs + pos_embs
+        
+        # Pass through transformer blocks
+        x = self.transformer.blocks(x)
+        
+        # x shape: (B, T, n_embed)
+        # Flatten to (B, T * n_embed)
+        x_flat = x.reshape(B, -1)
+        
+        # Project to output dimension
+        features = self.projection(x_flat)
+        
+        return features
+
 @dataclass
 class Config:
     use_characters = True # Should match train_lgbm_embedding.py
@@ -33,11 +69,15 @@ class Config:
     head_size = n_embed // n_heads
     attn_dropout = 0.0
     block_dropout = 0.0
+    
+    # Feature projection params (must match training)
+    output_dimension = 256
+    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def generate():
     lgbm_model_path = Path('shakespeare_lgbm_model_embedding.txt')
-    transformer_model_path = Path('shakespeare_transformer_feature_extractor.pth')
+    feature_extractor_path = Path('shakespeare_feature_extractor.pth')
     
     print(f"Loading models...")
     if not lgbm_model_path.exists():
@@ -45,8 +85,8 @@ def generate():
         print("Run train_lgbm_embedding.py first.")
         return
     
-    if not transformer_model_path.exists():
-        print(f"Transformer model file not found at {transformer_model_path}!")
+    if not feature_extractor_path.exists():
+        print(f"Feature extractor model file not found at {feature_extractor_path}!")
         print("Run train_lgbm_embedding.py first.")
         return
 
@@ -62,11 +102,13 @@ def generate():
 
     Config.vocab_size = tokenizer.get_vocab_size()
     
-    # Load transformer
-    print(f"Loading transformer feature extractor on {Config.device}...")
+    # Load feature extractor (transformer + projection)
+    print(f"Loading feature extractor on {Config.device}...")
     transformer = ShakespeareGPT(Config).to(Config.device)
-    transformer.load_state_dict(torch.load(transformer_model_path, map_location=Config.device))
-    transformer.eval()
+    input_dim = Config.block_size * Config.n_embed
+    feature_extractor = FeatureExtractor(transformer, input_dim, Config.output_dimension).to(Config.device)
+    feature_extractor.load_state_dict(torch.load(feature_extractor_path, map_location=Config.device))
+    feature_extractor.eval()
     
     # Load LightGBM
     print("Loading LightGBM classifier...")
@@ -86,21 +128,12 @@ def generate():
     print(f"Generating {length} characters/tokens...")
     
     for i in range(length):
-        # Extract features with transformer
+        # Extract features with feature extractor (transformer + projection)
         with torch.no_grad():
-            # Get embeddings
-            token_embs = transformer.token_embedding_table(current_context.unsqueeze(0))
-            pos_embs = transformer.pos_embedding_table(torch.arange(Config.block_size, device=Config.device))
-            x = token_embs + pos_embs
-            
-            # Pass through transformer blocks
-            x = transformer.blocks(x)
-            
-            # Flatten: (1, block_size, n_embed) -> (1, block_size * n_embed)
-            x_flat = x.reshape(1, -1).cpu().numpy()
+            features = feature_extractor(current_context.unsqueeze(0)).cpu().numpy()
         
         # Predict with LightGBM
-        probs = lgbm_model.predict(x_flat)[0]  # Shape: (vocab_size,)
+        probs = lgbm_model.predict(features)[0]  # Shape: (vocab_size,)
         
         # Sample
         next_id = np.random.choice(len(probs), p=probs)
