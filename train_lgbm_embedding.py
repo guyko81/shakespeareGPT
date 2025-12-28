@@ -162,7 +162,7 @@ def main():
 
     # Initialize transformer for feature extraction (on CPU to save memory)
     print(f"Initializing transformer model on CPU for feature extraction...")
-    transformer = ShakespeareGPT(Config).to('cpu')
+    transformer = ShakespeareGPT(Config).to('cuda')
     print(f"Transformer parameters: {sum(p.numel() for p in transformer.parameters()):,}")
     
     # Keep transformer frozen (random initialization, no training)
@@ -172,13 +172,13 @@ def main():
     print("\n" + "="*60)
     print("PREPARING TRAINING DATA")
     print("="*60)
-    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, transformer, 'cpu')
+    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, transformer, 'cuda')
     print(f"X_train shape: {X_train.shape}")
 
     print("\n" + "="*60)
     print("PREPARING VALIDATION DATA")
     print("="*60)
-    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, transformer, 'cpu')
+    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, transformer, 'cuda')
     print(f"X_val shape: {X_val.shape}")
     print("="*60 + "\n")
 
