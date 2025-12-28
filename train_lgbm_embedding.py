@@ -1,11 +1,13 @@
 import lightgbm as lgb
 import numpy as np
 import torch
+import torch.nn as nn
 from dataset import ShakespeareDataset
 from dataclasses import dataclass
 from tokenizers import Tokenizer
 import time
 from pathlib import Path
+from gpt import ShakespeareGPT
 
 # Setup paths (similar to train.py)
 tokenizer_path = Path('./tokenizer/shakespeare.json')
@@ -14,20 +16,27 @@ tokenizer = Tokenizer.from_file(str(tokenizer_path))
 @dataclass
 class Config:
     use_characters = True # Set to False to use BPE tokens
-    device = 'cpu'        # 'cpu' or 'gpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'        # 'cpu' or 'cuda'
     block_size = 256 # context-length
     batch_size = 10000 # Increased chunk size
     
     vocab_size = 0 # Set dynamically
-    n_embed = 4 # Embedding dimension
+    
+    # Transformer params
+    n_embed = 32 # Embedding dimension (small for feature extraction)
+    n_heads = 2 # Number of attention heads
+    n_layers = 2 # Number of transformer layers
+    head_size = n_embed // n_heads # Computed automatically
+    attn_dropout = 0.0 # No dropout for feature extraction
+    block_dropout = 0.0 # No dropout for feature extraction
     
     train_size = 0.8 
     
-    # NN params
+    # LGBM params
     train_iters = 500 
     val_iters = 500 
     eval_interval = 10 # More frequent evaluation
-    early_stopping_rounds = 5 # Stop if no improvement for 50 rounds
+    early_stopping_rounds = 5 # Stop if no improvement for 5 rounds
 
 class CharTokenizer:
     def __init__(self, text):
@@ -42,7 +51,20 @@ class CharTokenizer:
     def get_vocab_size(self):
         return self.vocab_size
 
-def prepare_full_data(data, block_size, token_embeddings, pos_embeddings):
+def prepare_full_data(data, block_size, transformer_model, device):
+    """
+    Extract features using the transformer model.
+    
+    Args:
+        data: torch.Tensor of token IDs
+        block_size: context length
+        transformer_model: ShakespeareGPT model (without LM head, or we ignore its output)
+        device: 'cpu' or 'cuda'
+    
+    Returns:
+        X_flat: (N, block_size * n_embed) numpy array
+        y: (N,) numpy array of target tokens
+    """
     from numpy.lib.stride_tricks import sliding_window_view
     data_np = data.numpy().astype(np.int32)
     print(f"Preparing sliding windows for {len(data_np)} tokens...")
@@ -54,22 +76,40 @@ def prepare_full_data(data, block_size, token_embeddings, pos_embeddings):
     X_ids = np.ascontiguousarray(windows[:, :-1])
     y = np.ascontiguousarray(windows[:, -1])
     
-    # Map to embeddings
-    # token_embeddings: (vocab_size, n_embed)
-    # pos_embeddings: (block_size, n_embed)
+    print(f"Extracting features with transformer (batch processing)...")
     
-    # 1. Get token embeddings for all inputs
-    # Shape: (N, block_size, n_embed)
-    X_emb = token_embeddings[X_ids] 
+    # Convert to torch tensor
+    X_ids_torch = torch.from_numpy(X_ids).long().to(device)
     
-    # 2. Add positional embeddings
-    # Shape broadcasts: (N, block_size, n_embed) + (1, block_size, n_embed)
-    X_emb = X_emb + pos_embeddings[None, :, :]
+    # Extract features in batches to avoid OOM
+    batch_size = 512  # Process 512 samples at a time
+    all_features = []
     
-    # 3. Flatten
-    # Shape: (N, block_size * n_embed)
-    N, T, C = X_emb.shape
-    X_flat = X_emb.reshape(N, T * C)
+    transformer_model.eval()
+    with torch.no_grad():
+        for i in range(0, len(X_ids_torch), batch_size):
+            batch = X_ids_torch[i:i+batch_size]
+            
+            # Get token embeddings + positional embeddings
+            B, T = batch.shape
+            token_embs = transformer_model.token_embedding_table(batch)
+            pos_embs = transformer_model.pos_embedding_table(torch.arange(T, device=device))
+            x = token_embs + pos_embs
+            
+            # Pass through transformer blocks
+            x = transformer_model.blocks(x)
+            
+            # x shape: (B, T, n_embed)
+            # Flatten to (B, T * n_embed)
+            x_flat = x.reshape(B, -1)
+            
+            all_features.append(x_flat.cpu().numpy())
+            
+            if i % 10000 == 0:
+                print(f"Processed {i}/{len(X_ids_torch)} samples...", end='\r')
+    
+    X_flat = np.concatenate(all_features, axis=0).astype(np.float32)
+    print(f"\nFeature extraction complete. Shape: {X_flat.shape}")
     
     return X_flat, y
 
@@ -102,30 +142,35 @@ def main():
         train_data_raw = train_ds.data
         val_data_raw = val_ds.data
 
-    # Create random embeddings
-    print("Creating random embeddings...")
-    # Fixed random seed for reproducibility of embeddings
-    rng = np.random.RandomState(42)
-    token_embeddings = rng.randn(Config.vocab_size, Config.n_embed).astype(np.float32)
-    pos_embeddings = rng.randn(Config.block_size, Config.n_embed).astype(np.float32)
+    # Initialize transformer for feature extraction
+    print(f"Initializing transformer model on {Config.device}...")
+    transformer = ShakespeareGPT(Config).to(Config.device)
+    print(f"Transformer parameters: {sum(p.numel() for p in transformer.parameters()):,}")
+    
+    # Keep transformer frozen (random initialization, no training)
+    for param in transformer.parameters():
+        param.requires_grad = False
 
     print("Preparing Training Data...")
-    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, token_embeddings, pos_embeddings)
+    X_train, y_train = prepare_full_data(train_data_raw, Config.block_size, transformer, Config.device)
     print(f"X_train shape: {X_train.shape}")
 
     print("Preparing Validation Data...")
-    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, token_embeddings, pos_embeddings)
+    X_val, y_val = prepare_full_data(val_data_raw, Config.block_size, transformer, Config.device)
     print(f"X_val shape: {X_val.shape}")
 
     # No categorical features anymore
     cat_features = None # list(range(Config.block_size))
+    
+    # Map torch device to LightGBM device
+    lgbm_device = 'gpu' if Config.device == 'cuda' else 'cpu'
     
     # Parameters
     params = {
         'objective': 'multiclass',
         'num_class': Config.vocab_size,
         'metric': 'multi_logloss',
-        'device': Config.device,
+        'device': lgbm_device,
         'gpu_platform_id': 0,
         'gpu_device_id': 0,
         'verbose': -1,
@@ -167,9 +212,14 @@ def main():
     print(f"\nTraining finished in {time.time() - start_time:.2f} seconds")
     
     # Save model
-    model_path = Path('shakespeare_lgbm_model.txt')
+    model_path = Path('shakespeare_lgbm_model_embedding.txt')
     model.save_model(str(model_path))
-    print(f"Model saved to {model_path}")
+    print(f"LightGBM model saved to {model_path}")
+    
+    # Save transformer model
+    transformer_path = Path('shakespeare_transformer_feature_extractor.pth')
+    torch.save(transformer.state_dict(), transformer_path)
+    print(f"Transformer feature extractor saved to {transformer_path}")
 
 if __name__ == "__main__":
     main()
