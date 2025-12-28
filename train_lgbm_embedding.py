@@ -31,7 +31,7 @@ class Config:
     block_dropout = 0.0 # No dropout for feature extraction
     
     # Feature projection params
-    output_dimension = 256 # Dimensionality reduction: flatten(block_size * n_embed) -> output_dimension
+    output_dimension = 64 # Dimensionality reduction: flatten(block_size * n_embed) -> output_dimension
     
     # Pre-training params
     pretrain_epochs = 2 # Number of epochs to pre-train the feature extractor
@@ -422,6 +422,15 @@ def main():
     print(f"X_val shape: {X_val.shape}")
     print("="*60 + "\n")
 
+    # Free GPU memory after feature extraction
+    print("Freeing GPU memory...")
+    del feature_extractor
+    del transformer
+    if 'model_with_head' in locals():
+        del model_with_head
+    torch.cuda.empty_cache()
+    print(f"GPU memory freed. Available memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+
     # No categorical features anymore
     cat_features = None # list(range(Config.block_size))
     
@@ -439,13 +448,13 @@ def main():
         'verbose': -1,
         'seed': 42,
         'num_threads': -1,    # Use all available cores
-        'max_depth': 6,
-        'num_leaves': 256,
+        'max_depth': 10,
+        'num_leaves': 1000,
         'learning_rate': 0.1,
         'min_data_in_leaf': 1,
         'lambda_l2': 1.0,
-        'subsample': 0.8,
-        'feature_fraction': 0.8
+        'subsample': 1.0,
+        'feature_fraction': 1.0
     }
     
     print(f"Starting full training for {Config.train_iters} rounds...")
