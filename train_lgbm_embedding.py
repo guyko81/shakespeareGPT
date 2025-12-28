@@ -431,6 +431,22 @@ def main():
     torch.cuda.empty_cache()
     print(f"GPU memory freed. Available memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
 
+    # Check for NaN or Inf values
+    print("\nChecking for invalid values in features...")
+    train_has_nan = np.isnan(X_train).any()
+    train_has_inf = np.isinf(X_train).any()
+    val_has_nan = np.isnan(X_val).any()
+    val_has_inf = np.isinf(X_val).any()
+    
+    if train_has_nan or train_has_inf or val_has_nan or val_has_inf:
+        print(f"WARNING: Found invalid values - Train NaN: {train_has_nan}, Train Inf: {train_has_inf}, Val NaN: {val_has_nan}, Val Inf: {val_has_inf}")
+        # Replace NaN and Inf with 0
+        X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
+        X_val = np.nan_to_num(X_val, nan=0.0, posinf=0.0, neginf=0.0)
+        print("Invalid values replaced with 0")
+    else:
+        print("No invalid values found - data is clean!")
+
     # No categorical features anymore
     cat_features = None # list(range(Config.block_size))
     
@@ -451,7 +467,7 @@ def main():
         'max_depth': 10,
         'num_leaves': 1000,
         'learning_rate': 0.1,
-        'min_data_in_leaf': 1,
+        'min_data_in_leaf': 20,  # Increased from 1 to avoid splitting errors
         'lambda_l2': 1.0,
         'subsample': 1.0,
         'feature_fraction': 1.0
