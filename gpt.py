@@ -30,7 +30,7 @@ class AttentionHead(nn.Module):
         k = self.key(x)
         q = self.query(x)
 
-        wei = q@k.transpose(-2,-1) * (C ** 0.5)
+        wei = q@k.transpose(-2,-1) * (self.head_size ** -0.5)
         wei = wei.masked_fill(self.tril[:T,:T]==0,float('-inf'))
         wei = F.softmax(wei, dim=-1)
         wei = self.dropout(wei)
@@ -105,7 +105,7 @@ class ShakespeareGPT(nn.Module):
         self.pos_embedding_table = nn.Embedding(self.block_size, self.n_embed)
         
         self.blocks = nn.Sequential(
-            *[TransformerBlock(Config)]*Config.n_layers,
+            *[TransformerBlock(Config) for _ in range(Config.n_layers)],
             nn.LayerNorm(self.n_embed)
         )
 

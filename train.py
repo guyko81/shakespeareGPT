@@ -4,7 +4,6 @@ import torch.nn.functional as F
 
 from dataclasses import dataclass
 from tokenizers import Tokenizer
-from train import Config
 
 from dataset import ShakespeareDataset
 
@@ -16,33 +15,47 @@ from pathlib import Path
 
 tokenizer = Tokenizer.from_file('./tokenizer/shakespeare.json')
 
+# hyperparameters
+batch_size = 64 # how many independent sequences will we process in parallel?
+block_size = 256 # what is the maximum context length for predictions?
+max_iters = 5000
+eval_interval = 500
+learning_rate = 3e-4
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+eval_iters = 200
+n_embd = 384
+n_head = 6
+n_layer = 6
+dropout = 0.2
+# ------------
+
 @dataclass
 class Config:
+    batch_size = batch_size
+    block_size = block_size
+    max_iters = max_iters
+    eval_interval = eval_interval
+    learning_rate = learning_rate
+    device = device
+    eval_iters = eval_iters
+    n_embd = n_embd
+    n_head = n_head
+    n_layer = n_layer
+    dropout = dropout
     
-    block_size = 256 # context-length
-    batch_size = 64 # mini-batch size
-    
+    # needed for the code logic
     vocab_size = tokenizer.get_vocab_size()
     
-    train_size = 0.8 
-    
-    n_embed = 384
-    n_heads = 12
-    head_size = n_embed // n_heads # computes to 384/12=32
-    
-    n_layers = 4
-    
-    train_iters = 5000 # no. of batches to train on
-    val_iters = 500 # no. of batches to validate on every eval_intervals
-    
-    eval_interval = 500 # validate after every eval_interval iterations while training
-    
-    lr = 6e-4 # also used by the GPT 3 Small, quite a lot more stable than 1e-3
-    
-    attn_dropout = 0.1
-    block_dropout = 0.1
-    
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # compatibility with gpt.py and existing train.py logic
+    n_embed = n_embd
+    n_heads = n_head
+    n_layers = n_layer
+    lr = learning_rate
+    train_iters = max_iters
+    val_iters = eval_iters
+    attn_dropout = dropout
+    block_dropout = dropout
+    head_size = n_embd // n_head
     
 
 
