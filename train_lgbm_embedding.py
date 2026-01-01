@@ -23,9 +23,9 @@ class Config:
     vocab_size = 0 # Set dynamically
     
     # Transformer params
-    n_embed = 32 # Embedding dimension (small for feature extraction)
-    n_heads = 2 # Number of attention heads
-    n_layers = 2 # Number of transformer layers
+    n_embed = 384 # Embedding dimension (small for feature extraction)
+    n_heads = 6 # Number of attention heads
+    n_layers = 6 # Number of transformer layers
     head_size = n_embed // n_heads # Computed automatically
     attn_dropout = 0.0 # No dropout for feature extraction
     block_dropout = 0.0 # No dropout for feature extraction
@@ -34,7 +34,7 @@ class Config:
     output_dimension = 64 # Dimensionality reduction: flatten(block_size * n_embed) -> output_dimension
     
     # Pre-training params
-    pretrain_epochs = 2 # Number of epochs to pre-train the feature extractor
+    pretrain_epochs = 10 # Number of epochs to pre-train the feature extractor
     pretrain_batch_size = 64 # Batch size for pre-training
     pretrain_learning_rate = 1e-3 # Learning rate for pre-training
     
